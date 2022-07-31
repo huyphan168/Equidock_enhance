@@ -3,13 +3,14 @@ import numpy as np
 from numpy import linalg as LA
 import dgl
 from src.utils.protein_featurizers import residue_type_one_hot_dips_not_one_hot,  residue_type_one_hot_dips
-
 import math
-
+import os
+import pandas as pd
 from scipy.special import softmax
-
+import pandas as pd
 from scipy.spatial.transform import Rotation
 from src.utils.zero_copy_from_numpy import *
+from biopandas.pdb import PandasPdb
 
 
 def UniformRotation_Translation(translation_interval):
@@ -165,7 +166,7 @@ def preprocess_unbound_bound(bound_ligand_residues, bound_receptor_residues, gra
             receptor_pocket_coors = bound_receptor_repres_nodes_loc_array[active_receptor, :]
             assert np.max(np.linalg.norm(ligand_pocket_coors - receptor_pocket_coors, axis=1)) <= pos_cutoff
             pocket_coors = 0.5 * (ligand_pocket_coors + receptor_pocket_coors)
-            print('Num pocket nodes = ', len(active_ligand), ' total nodes = ', bound_ligand_repres_nodes_loc_array.shape[0], ' graph_nodes = ', graph_nodes)
+            # print('Num pocket nodes = ', len(active_ligand), ' total nodes = ', bound_ligand_repres_nodes_loc_array.shape[0], ' graph_nodes = ', graph_nodes)
 
         return unbound_predic_ligand_clean_list, unbound_predic_receptor_clean_list, \
                bound_ligand_repres_nodes_loc_array, bound_receptor_repres_nodes_loc_array, \
@@ -174,23 +175,172 @@ def preprocess_unbound_bound(bound_ligand_residues, bound_receptor_residues, gra
     return unbound_predic_ligand_clean_list, unbound_predic_receptor_clean_list, \
            bound_ligand_repres_nodes_loc_array, bound_receptor_repres_nodes_loc_array
 
+def preprocess_db5_unbound_bound(code, raw_data_path, graph_nodes, pos_cutoff=8.0, inference=False):
+    def get_residues_db5(pdb_filename):
+        df = PandasPdb().read_pdb(pdb_filename).df['ATOM']
+        df.rename(columns={'chain_id': 'chain', 'residue_number': 'residue', 'residue_name': 'resname',
+                        'x_coord': 'x', 'y_coord': 'y', 'z_coord': 'z', 'element_symbol': 'element'}, inplace=True)
+        residues = list(df.groupby(['chain', 'residue', 'resname']))  ## Not the same as sequence order !
+        return residues
+    def filter_residues(residues):
+        residues_filtered = []
+        for residue in residues:
+            df = residue[1]
+            Natom = df[df['atom_name'] == 'N']
+            alphaCatom = df[df['atom_name'] == 'CA']
+            Catom = df[df['atom_name'] == 'C']
 
+            if Natom.shape[0] == 1 and alphaCatom.shape[0] == 1 and Catom.shape[0] == 1:
+                residues_filtered.append(residue)
+        return residues_filtered
+   ##########################
+    
+    bound_ligand_residues = get_residues_db5(os.path.join(raw_data_path, code + '_l_b.pdb'))
+    bound_receptor_residues = get_residues_db5(os.path.join(raw_data_path, code + '_r_b.pdb'))
 
+    bound_predic_ligand_filtered = filter_residues(bound_ligand_residues)
+    unbound_predic_ligand_filtered = bound_predic_ligand_filtered
 
-def protein_to_graph_unbound_bound(unbound_ligand_predic,
-                                   unbound_receptor_predic,
-                                   bound_ligand_repres_nodes_loc_clean_array,  # (N_res, 3) np array of coordinates
-                                   bound_receptor_repres_nodes_loc_clean_array,  # (N_res, 3) np array
+    bound_predic_receptor_filtered = filter_residues(bound_receptor_residues)
+    unbound_predic_receptor_filtered = bound_predic_receptor_filtered
+
+    bound_predic_ligand_clean_list = bound_predic_ligand_filtered
+    unbound_predic_ligand_clean_list = unbound_predic_ligand_filtered
+
+    bound_predic_receptor_clean_list= bound_predic_receptor_filtered
+    unbound_predic_receptor_clean_list = unbound_predic_receptor_filtered
+
+    ###################
+    def get_alphaC_loc_array(bound_predic_clean_list):
+        bound_alphaC_loc_clean_list = []
+        for residue in bound_predic_clean_list:
+            df = residue[1]
+            alphaCatom = df[df['atom_name'] == 'CA']
+            alphaC_loc = alphaCatom[['x', 'y', 'z']].to_numpy().squeeze().astype(np.float32)
+            assert alphaC_loc.shape == (3,), \
+                f"alphac loc shape problem, shape: {alphaC_loc.shape} residue {df} resid {df['residue']}"
+            bound_alphaC_loc_clean_list.append(alphaC_loc)
+        if len(bound_alphaC_loc_clean_list) <= 1:
+            bound_alphaC_loc_clean_list.append(np.zeros(3))
+        return np.stack(bound_alphaC_loc_clean_list, axis=0)  # (N_res,3)
+
+   ####################
+
+    assert graph_nodes == 'residues'
+    bound_receptor_repres_nodes_loc_array = get_alphaC_loc_array(bound_predic_receptor_clean_list)
+    bound_ligand_repres_nodes_loc_array = get_alphaC_loc_array(bound_predic_ligand_clean_list)
+
+    if not inference:
+
+        # Keep pairs of ligand and receptor residues/atoms that have pairwise distances < threshold
+        ligand_receptor_distance = spa.distance.cdist(bound_ligand_repres_nodes_loc_array, bound_receptor_repres_nodes_loc_array)
+        positive_tuple = np.where(ligand_receptor_distance < pos_cutoff)
+        active_ligand = positive_tuple[0]
+        active_receptor = positive_tuple[1]
+        if active_ligand.size <= 3: # We need: active_ligand.size > 0 '
+            pocket_coors = None ## Will be filtered out later
+        else:
+            ligand_pocket_coors = bound_ligand_repres_nodes_loc_array[active_ligand, :]
+            receptor_pocket_coors = bound_receptor_repres_nodes_loc_array[active_receptor, :]
+            assert np.max(np.linalg.norm(ligand_pocket_coors - receptor_pocket_coors, axis=1)) <= pos_cutoff
+            pocket_coors = 0.5 * (ligand_pocket_coors + receptor_pocket_coors)
+            # print('Num pocket nodes = ', len(active_ligand), ' total nodes = ', bound_ligand_repres_nodes_loc_array.shape[0], ' graph_nodes = ', graph_nodes)
+
+        return unbound_predic_ligand_clean_list, unbound_predic_receptor_clean_list, \
+               bound_ligand_repres_nodes_loc_array, bound_receptor_repres_nodes_loc_array, \
+               pocket_coors
+
+    return unbound_predic_ligand_clean_list, unbound_predic_receptor_clean_list, \
+           bound_ligand_repres_nodes_loc_array, bound_receptor_repres_nodes_loc_array
+
+def preprocess_dips_unbound_bound(file_name, raw_data_path, graph_nodes, pos_cutoff=8.0, inference=False):
+    def get_residues_DIPS(dill_filename):
+        x = pd.read_pickle(dill_filename)
+        df0 = x.df0
+        df0.rename(columns={'chain_id': 'chain', 'residue_number': 'residue', 'residue_name': 'resname',
+                        'x_coord': 'x', 'y_coord': 'y', 'z_coord': 'z', 'element_symbol': 'element'}, inplace=True)
+        residues0 = list(df0.groupby(['chain', 'residue', 'resname']))  ## Not the same as sequence order !
+        df1 = x.df1
+        df1.rename(columns={'chain_id': 'chain', 'residue_number': 'residue', 'residue_name': 'resname',
+                        'x_coord': 'x', 'y_coord': 'y', 'z_coord': 'z', 'element_symbol': 'element'}, inplace=True)
+        residues1 = list(df1.groupby(['chain', 'residue', 'resname']))  ## Not the same as sequence order !
+        return residues0, residues1
+    def filter_residues(residues):
+        residues_filtered = []
+        for residue in residues:
+            df = residue[1]
+            Natom = df[df['atom_name'] == 'N']
+            alphaCatom = df[df['atom_name'] == 'CA']
+            Catom = df[df['atom_name'] == 'C']
+
+            if Natom.shape[0] == 1 and alphaCatom.shape[0] == 1 and Catom.shape[0] == 1:
+                residues_filtered.append(residue)
+        return residues_filtered
+   ##########################
+    bound_ligand_residues, bound_receptor_residues = get_residues_DIPS(os.path.join(raw_data_path, file_name))
+
+    bound_predic_ligand_filtered = filter_residues(bound_ligand_residues)
+    unbound_predic_ligand_filtered = bound_predic_ligand_filtered
+
+    bound_predic_receptor_filtered = filter_residues(bound_receptor_residues)
+    unbound_predic_receptor_filtered = bound_predic_receptor_filtered
+
+    bound_predic_ligand_clean_list = bound_predic_ligand_filtered
+    unbound_predic_ligand_clean_list = unbound_predic_ligand_filtered
+
+    bound_predic_receptor_clean_list= bound_predic_receptor_filtered
+    unbound_predic_receptor_clean_list = unbound_predic_receptor_filtered
+
+    ###################
+    def get_alphaC_loc_array(bound_predic_clean_list):
+        bound_alphaC_loc_clean_list = []
+        for residue in bound_predic_clean_list:
+            df = residue[1]
+            alphaCatom = df[df['atom_name'] == 'CA']
+            alphaC_loc = alphaCatom[['x', 'y', 'z']].to_numpy().squeeze().astype(np.float32)
+            assert alphaC_loc.shape == (3,), \
+                f"alphac loc shape problem, shape: {alphaC_loc.shape} residue {df} resid {df['residue']}"
+            bound_alphaC_loc_clean_list.append(alphaC_loc)
+        if len(bound_alphaC_loc_clean_list) <= 1:
+            bound_alphaC_loc_clean_list.append(np.zeros(3))
+        return np.stack(bound_alphaC_loc_clean_list, axis=0)  # (N_res,3)
+
+   ####################
+
+    assert graph_nodes == 'residues'
+    bound_receptor_repres_nodes_loc_array = get_alphaC_loc_array(bound_predic_receptor_clean_list)
+    bound_ligand_repres_nodes_loc_array = get_alphaC_loc_array(bound_predic_ligand_clean_list)
+
+    if not inference:
+
+        # Keep pairs of ligand and receptor residues/atoms that have pairwise distances < threshold
+        ligand_receptor_distance = spa.distance.cdist(bound_ligand_repres_nodes_loc_array, bound_receptor_repres_nodes_loc_array)
+        positive_tuple = np.where(ligand_receptor_distance < pos_cutoff)
+        active_ligand = positive_tuple[0]
+        active_receptor = positive_tuple[1]
+        if active_ligand.size <= 3: # We need: active_ligand.size > 0 '
+            pocket_coors = None ## Will be filtered out later
+        else:
+            ligand_pocket_coors = bound_ligand_repres_nodes_loc_array[active_ligand, :]
+            receptor_pocket_coors = bound_receptor_repres_nodes_loc_array[active_receptor, :]
+            assert np.max(np.linalg.norm(ligand_pocket_coors - receptor_pocket_coors, axis=1)) <= pos_cutoff
+            pocket_coors = 0.5 * (ligand_pocket_coors + receptor_pocket_coors)
+            # print('Num pocket nodes = ', len(active_ligand), ' total nodes = ', bound_ligand_repres_nodes_loc_array.shape[0], ' graph_nodes = ', graph_nodes)
+
+        return unbound_predic_ligand_clean_list, unbound_predic_receptor_clean_list, \
+               bound_ligand_repres_nodes_loc_array, bound_receptor_repres_nodes_loc_array, \
+               pocket_coors
+
+    return unbound_predic_ligand_clean_list, unbound_predic_receptor_clean_list, \
+           bound_ligand_repres_nodes_loc_array, bound_receptor_repres_nodes_loc_array
+
+def protein_to_graph_unbound_bound(protein_to_graph_input,
                                    graph_nodes,
                                    cutoff=20,
                                    max_neighbor=None,
                                    one_hot=False,
                                    residue_loc_is_alphaC=True):
-
-    return protein_to_graph_unbound_bound_residuesonly(unbound_ligand_predic,
-                                                       unbound_receptor_predic,
-                                                       bound_ligand_repres_nodes_loc_clean_array,
-                                                       bound_receptor_repres_nodes_loc_clean_array,
+    return protein_to_graph_unbound_bound_residuesonly(*protein_to_graph_input,
                                                        cutoff,
                                                        max_neighbor,
                                                        one_hot,

@@ -1,17 +1,29 @@
 import warnings
 
 warnings.filterwarnings("ignore", category=FutureWarning)
+import joblib
 from joblib import Parallel, delayed, cpu_count
+from tqdm.auto import tqdm
 import os
 import sys
+
+class ProgressParallel(joblib.Parallel):
+    ## Allowing for progress bar to be shown.
+    def __call__(self, *args, **kwargs):
+        with tqdm() as self._pbar:
+            return joblib.Parallel.__call__(self, *args, **kwargs)
+
+    def print_progress(self):
+        self._pbar.total = self.n_dispatched_tasks
+        self._pbar.n = self.n_completed_tasks
+        self._pbar.refresh()
 
 # deletes all contents of dir and recreates it.
 def create_dir(path):
   if os.path.exists(path):
     print('Path ', path, ' already exists. Please delete and restart your job.')
-    sys.exit(1)
-  os.makedirs(path, exist_ok=False)
-
+  #   sys.exit(1)
+  # os.makedirs(path, exist_ok=False)
 
 def pmap_multi(pickleable_fn, data, n_jobs=None, verbose=1, **kwargs):
   """
@@ -44,8 +56,8 @@ def pmap_multi(pickleable_fn, data, n_jobs=None, verbose=1, **kwargs):
   if n_jobs is None:
     n_jobs = cpu_count() - 1
 
-  results = Parallel(n_jobs=n_jobs, verbose=verbose, timeout=None)(
-    delayed(pickleable_fn)(*d, **kwargs) for i, d in enumerate(data)
+  results = ProgressParallel(n_jobs=n_jobs, verbose=verbose, timeout=None)(
+    delayed(pickleable_fn)(d, **kwargs) for i, d in enumerate(data)
   )
 
   return results

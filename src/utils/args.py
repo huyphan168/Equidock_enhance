@@ -118,7 +118,6 @@ parser.add_argument('-continue_train_model', type=str, default='')
 
 args = parser.parse_args().__dict__
 
-
 args['device'] = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 print(f"Available GPUS:{torch.cuda.device_count()}")
 
@@ -293,7 +292,7 @@ assert args['noise_decay_rate'] < 1., 'Noise has to decrease to 0, decay rate ca
 
 banner = get_model_name(args)
 
-print(banner)
+# print(banner)
 
 
 def pprint(*kargs):

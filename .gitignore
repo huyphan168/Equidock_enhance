@@ -1,0 +1,6 @@
+cache/
+checkpts
+DIPS/
+stdouterr/
+tb_logs/
+protein_to_graph_input_1.pkl
