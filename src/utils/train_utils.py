@@ -7,18 +7,18 @@ import numpy as np
 
 import torch
 import random
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, distributed
 from src.utils.db5_data import Unbound_Bound_Data
 from functools import partial
 import dgl
 from src.model.rigid_docking_model import *
 
-def set_random_seed(seed=0):
-  random.seed(seed)
-  np.random.seed(seed)
-  torch.manual_seed(seed)
-  if torch.cuda.is_available():
-    torch.cuda.manual_seed(seed)
+# def set_random_seed(seed=0):
+#   random.seed(seed)
+#   np.random.seed(seed)
+#   torch.manual_seed(seed)
+#   if torch.cuda.is_available():
+#     torch.cuda.manual_seed(seed)
 
 
 
@@ -27,23 +27,29 @@ def get_dataloader(args, log):
     log(f"# Loading dataset: {args['data']}")
     num_worker = 0  # 0 if args['debug'] else args['worker']
     log(f"# Num_worker:{num_worker}")
+
     train_set = Unbound_Bound_Data(args, if_swap=True, reload_mode='train', load_from_cache=True, data_fraction=args['data_fraction'])
+    sampler = (
+        None if args.local_rank == -1 else distributed.DistributedSampler(train_set, shuffle=True)
+    )
+
     val_set = Unbound_Bound_Data(args, if_swap=False, reload_mode='val', load_from_cache=True)
     test_set = Unbound_Bound_Data(args, if_swap=False, reload_mode='test', load_from_cache=True)
 
     train_loader = DataLoader(dataset=train_set,
-                              batch_size=args['bs'],
+                              batch_size=args['bs']//args['world_size'],
                               shuffle=True,
                               collate_fn=partial(batchify_and_create_hetero_graphs),
+                              sampler=sampler,
                               num_workers=num_worker,
                               )
     val_loader = DataLoader(dataset=val_set,
-                            batch_size=args['bs'],
+                            batch_size=args['bs']//args['world_size'],
                             collate_fn=partial(batchify_and_create_hetero_graphs),
                             num_workers=num_worker
                             )
     test_loader = DataLoader(dataset=test_set,
-                             batch_size=args['bs'],
+                             batch_size=args['bs']//args['world_size'],
                              collate_fn=partial(batchify_and_create_hetero_graphs),
                              num_workers=num_worker)
 

@@ -12,9 +12,12 @@ from src.utils.args import *
 from src.utils.ot_utils import *
 from src.utils.eval import Meter_Unbound_Bound
 from src.utils.early_stop import EarlyStopping
+from src.utils.envs import get_envs, select_device, set_random_seed
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import torch.multiprocessing
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 import random
 
 
@@ -29,9 +32,6 @@ def log(*pargs):
         w.write(" ".join(["{}".format(t) for t in pargs]))
         w.write("\n")
         pprint(*pargs)
-
-
-
 # Ligand residue locations: a_i in R^3. Receptor: b_j in R^3
 # Ligand: G_l(x) = -sigma * ln( \sum_i  exp(- ||x - a_i||^2 / sigma)  ), same for G_r(x)
 # Ligand surface: x such that G_l(x) = surface_ct
@@ -47,9 +47,6 @@ def compute_body_intersection_loss(model_ligand_coors_deform, bound_receptor_rep
     loss = torch.mean( torch.clamp(surface_ct - G_fn(bound_receptor_repres_nodes_loc_array, model_ligand_coors_deform, sigma), min=0) ) + \
            torch.mean( torch.clamp(surface_ct - G_fn(model_ligand_coors_deform, bound_receptor_repres_nodes_loc_array, sigma), min=0) )
     return loss
-
-
-
 
 def run_a_generic_epoch(ep_type, args, epoch, model, data_loader, loss_fn_coors, optimizer):
     time.sleep(2)
@@ -243,6 +240,18 @@ def main(args):
 
     tb_logger = SummaryWriter(log_dir=args['tb_log_dir'])
 
+    args.device = select_device(args.device)
+    # set random seed using new random seed for cudnn determinism
+    set_random_seed(1+args.rank, deterministic=(args.rank == -1))
+
+    args.rank, args.local_rank, args.world_size = get_envs()
+
+    ##Multi-gpu training
+    if args.local_rank != -1:
+        torch.cuda.set_device(args.local_rank)
+        dist.init_process_group(backend='nccl' if dist.is_nccl_available() else "gloo", init_method=args.dist_url,
+                        rank=args.local_rank, world_size=args.world_size)
+        args.device = torch.device('cuda', args.local_rank)
 
     # TODO: hack to init input_edge_feats_dim
     args['data'] = 'db5'
@@ -255,10 +264,12 @@ def main(args):
 
     model = create_model(args, log)
     param_count(model, log, print_model=False)
+    model.to(args.device)
 
-    if torch.cuda.is_available():
-        model.cuda()
-
+    ##Multi-gpu training
+    ddp_mode = args.device.type != 'cpu' and args.rank !=-1
+    if ddp_mode:
+        model = DDP(model, device_id=[args.local_rank], output_device=args.local_rank)
 
     if not args['toy']:
 
@@ -284,6 +295,11 @@ def main(args):
     args['split'] = 0
     model = train(args, tb_logger, model, nn.MSELoss(reduction='mean'))
 
+    #End
+    if args.world_size > 1 and args.rank == 0:
+        log('Destroying process group after the training')
+        dist.destroy_process_group()
+
 
 
 def train(args, tb_logger, model, loss_fn_coors):
@@ -295,6 +311,7 @@ def train(args, tb_logger, model, loss_fn_coors):
     args['cache_path'] = os.path.join(args['cache_path'], 'cv_' + str(args['split']))
 
 
+    ##TO-DO: editing the get_dataloader into multi-gpu mode
     train_loader, val_loader, test_loader = get_dataloader(args, log)
 
     stopper = EarlyStopping(mode='lower', patience=args['patience'], filename=args['checkpoint_filename'], log=log)

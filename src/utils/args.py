@@ -28,6 +28,11 @@ parser.add_argument('-split', type=int, required=False, default=0, help='cross v
 parser.add_argument('-worker', type=int, default=5, required=False, help="Number of worker for data loader.")
 parser.add_argument('-n_jobs', type=int, default=10, required=False, help="Number of worker for data preprocessing")
 
+#Multi-gpu
+parser.add_argument('-device', default='0', type=str, required=False, help='cuda device, i.e. 0 or 0,1,2,3 for multi-gpu training')
+parser.add_argument('--dist_url', default='env://', type=str, help='url used to set up distributed training')
+parser.add_argument('--gpu_count', type=int, default=0)
+parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter')
 
 # Optim and Scheduler
 parser.add_argument('-lr', type=float, default=3e-4, required=False)
