@@ -7,6 +7,7 @@ import numpy as np
 
 import torch
 import random
+import os
 from torch.utils.data import DataLoader, distributed
 from src.utils.db5_data import Unbound_Bound_Data
 from functools import partial
@@ -23,22 +24,20 @@ from src.model.rigid_docking_model import *
 
 
 def get_dataloader(args, log):
-    log('\n\n')
-    log(f"# Loading dataset: {args['data']}")
-    num_worker = 0  # 0 if args['debug'] else args['worker']
-    log(f"# Num_worker:{num_worker}")
+    log('\n\n', rank=args['rank'])
+    log(f"# Loading dataset: {args['data']}", rank=args['rank'])
+    # num_worker = 0  # 0 if args['debug'] else args['worker']
+    num_worker = args['worker'] // args['world_size']
+    log(f"# Num_worker:{num_worker}", rank=args['rank'])
 
     train_set = Unbound_Bound_Data(args, if_swap=True, reload_mode='train', load_from_cache=True, data_fraction=args['data_fraction'])
-    sampler = (
-        None if args.local_rank == -1 else distributed.DistributedSampler(train_set, shuffle=True)
-    )
+    sampler = distributed.DistributedSampler(train_set, shuffle=True)
 
     val_set = Unbound_Bound_Data(args, if_swap=False, reload_mode='val', load_from_cache=True)
     test_set = Unbound_Bound_Data(args, if_swap=False, reload_mode='test', load_from_cache=True)
 
     train_loader = DataLoader(dataset=train_set,
                               batch_size=args['bs']//args['world_size'],
-                              shuffle=True,
                               collate_fn=partial(batchify_and_create_hetero_graphs),
                               sampler=sampler,
                               num_workers=num_worker,
@@ -55,10 +54,10 @@ def get_dataloader(args, log):
 
 
 
-    log(f" Train:{len(train_loader.dataset)}, Valid:{len(val_loader.dataset)}, Test :{len(test_loader.dataset)}")
+    log(f" Train:{len(train_loader.dataset)}, Valid:{len(val_loader.dataset)}, Test :{len(test_loader.dataset)}", rank=args['rank'])
     args['input_edge_feats_dim'] = train_set[0][0].edata['he'].shape[1]
 
-    log('input_edge_feats_dim : ', args['input_edge_feats_dim'])
+    log('input_edge_feats_dim : ', args['input_edge_feats_dim'], rank=args['rank'])
     return train_loader, val_loader, test_loader
 
 
@@ -155,7 +154,7 @@ def pretty_print_stats(split_type, epoch, total_num_epochs,
                        ligand_rmsd_mean, ligand_rmsd_median,
                        receptor_rmsd_mean, receptor_rmsd_median,
                        avg_loss, avg_loss_ligand_coors,
-                       avg_loss_receptor_coors, avg_loss_ot, avg_loss_intersection, log):
+                       avg_loss_receptor_coors, avg_loss_ot, avg_loss_intersection, log, args):
 
     log('[{:s}] --> epoch {:d}/{:d} '
           '|| mean/median complex rmsd {:.4f} / {:.4f} '
@@ -169,4 +168,4 @@ def pretty_print_stats(split_type, epoch, total_num_epochs,
                  ligand_rmsd_mean, ligand_rmsd_median,
                  math.sqrt(avg_loss_ot),
                  avg_loss_intersection,
-                 receptor_rmsd_mean, receptor_rmsd_median))
+                 receptor_rmsd_mean, receptor_rmsd_median), args['rank'])

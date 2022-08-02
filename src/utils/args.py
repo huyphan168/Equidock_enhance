@@ -10,8 +10,6 @@ import argparse
 import os
 import torch
 
-print('Parsing args')
-
 parser = argparse.ArgumentParser(description='Docking')
 
 
@@ -25,13 +23,13 @@ parser.add_argument('-random_seed', type=int, required=False, default=8, help='r
 parser.add_argument('-data', type=str, required=False, default='db5', choices=['db5', 'dips'])
 parser.add_argument('-data_fraction', type=float, default=1., required=False)
 parser.add_argument('-split', type=int, required=False, default=0, help='cross valid split')
-parser.add_argument('-worker', type=int, default=5, required=False, help="Number of worker for data loader.")
+parser.add_argument('-worker', type=int, default=8, required=False, help="Number of worker for data loader.")
 parser.add_argument('-n_jobs', type=int, default=10, required=False, help="Number of worker for data preprocessing")
 
 #Multi-gpu
 parser.add_argument('-device', default='0', type=str, required=False, help='cuda device, i.e. 0 or 0,1,2,3 for multi-gpu training')
-parser.add_argument('--dist_url', default='env://', type=str, help='url used to set up distributed training')
-parser.add_argument('--gpu_count', type=int, default=0)
+parser.add_argument('-dist_url', default='env://', type=str, help='url used to set up distributed training')
+parser.add_argument('-gpu_count', type=int, default=0)
 parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter')
 
 # Optim and Scheduler
@@ -123,8 +121,8 @@ parser.add_argument('-continue_train_model', type=str, default='')
 
 args = parser.parse_args().__dict__
 
-args['device'] = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-print(f"Available GPUS:{torch.cuda.device_count()}")
+# args['device'] = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+# print(f"Available GPUS:{torch.cuda.device_count()}")
 
 if torch.cuda.is_available():
     torch.cuda.set_device(0)

@@ -107,7 +107,7 @@ class IEGMN_Layer(nn.Module):
         self.fine_tune = fine_tune
 
         self.debug = args['debug']
-        self.device = args['device']
+        self.device = args['rank']
         self.log = log
 
         self.h_feats_dim = h_feats_dim
@@ -366,7 +366,7 @@ class IEGMN(nn.Module):
         self.debug = args['debug']
         self.log=log
 
-        self.device = args['device']
+        self.device = args['local_rank']
         self.graph_nodes = args['graph_nodes']
 
         self.rot_model = args['rot_model']

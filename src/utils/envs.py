@@ -31,7 +31,6 @@ def select_device(device):
         os.environ['CUDA_VISIBLE_DEVICES'] = device
         assert torch.cuda.is_available()
         nd = len(device.strip().split(','))
-        print(f'Using {nd} GPU for training... ')
     cuda = device != 'cpu' and torch.cuda.is_available()
     device = torch.device('cuda:0' if cuda else 'cpu')
     return device
